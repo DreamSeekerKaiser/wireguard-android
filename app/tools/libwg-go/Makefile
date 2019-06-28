@@ -1,9 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copyright © 2017-2018 WireGuard LLC. All Rights Reserved.
-
-UPSTREAM_FILES := $(filter-out %/main.go %/queueconstants.go,$(wildcard ../wireguard-go/*/*.go) $(wildcard ../wireguard-go/*.go)) ../wireguard-go/go.mod ../wireguard-go/go.sum
-DOWNSTREAM_FILES := $(wildcard src/*.go) $(wildcard src/*.c) $(wildcard src/*/*.go)
+# Copyright © 2017-2019 WireGuard LLC. All Rights Reserved.
 
 BUILDDIR ?= $(CURDIR)/build
 DESTDIR ?= $(CURDIR)/out
@@ -27,7 +24,7 @@ default: $(DESTDIR)/libwg-go.so
 
 GOBUILDARCH := $(NDK_GO_ARCH_MAP_$(shell uname -m))
 GOBUILDOS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
-GOBUILDVERSION := 1.11.4
+GOBUILDVERSION := 1.12.5
 GOBUILDTARBALL := https://dl.google.com/go/go$(GOBUILDVERSION).$(GOBUILDOS)-$(GOBUILDARCH).tar.gz
 GOBUILDVERSION_NEEDED := go version go$(GOBUILDVERSION) $(GOBUILDOS)/$(GOBUILDARCH)
 export GOROOT := $(BUILDDIR)/goroot
@@ -41,25 +38,12 @@ $(GOROOT)/bin/go:
 	rm -rf "$(GOROOT)"
 	mkdir -p "$(GOROOT)"
 	curl "$(GOBUILDTARBALL)" | tar -C "$(GOROOT)" --strip-components=1 -xzf - || { rm -rf "$(GOROOT)"; exit 1; }
-	cat goruntime-*.diff | patch -p1 -f -N -r- -d "$(GOROOT)" || { rm -rf "$(GOROOT)"; exit 1; }
+	patch -p1 -f -N -r- -d "$(GOROOT)" < goruntime-boottime-over-monotonic.diff || { rm -rf "$(GOROOT)"; exit 1; }
 
-$(shell test "$$(cat .gobuildversion 2>/dev/null)" = "$(GOBUILDVERSION_CURRENT)" || rm -f "$(DESTDIR)/libwg-go.so")
+$(shell test "$$(cat $(BUILDDIR)/.gobuildversion 2>/dev/null)" = "$(GOBUILDVERSION_CURRENT)" || rm -f "$(DESTDIR)/libwg-go.so")
 
-define copy-src-to-build
-$(subst $(1),$(BUILDDIR)/,$(2)): $(2)
-	@mkdir -vp "$$(dir $$@)"
-	@cp -vp "$$<" "$$@"
-$(BUILDDIR)/.prepared: $(subst $(1),$(BUILDDIR)/,$(2))
-endef
-
-$(foreach FILE,$(UPSTREAM_FILES),$(eval $(call copy-src-to-build,../wireguard-go/,$(FILE))))
-$(foreach FILE,$(DOWNSTREAM_FILES),$(eval $(call copy-src-to-build,src/,$(FILE))))
-
-$(BUILDDIR)/.prepared: $(GOROOT)/bin/go
-	cd "$(BUILDDIR)" && go get || { chmod -fR +w "$(GOPATH)/pkg/mod"; rm -rf "$(GOPATH)/pkg/mod"; exit 1; }
+$(DESTDIR)/libwg-go.so: $(GOROOT)/bin/go
+	go get -tags linux || { chmod -fR +w "$(GOPATH)/pkg/mod"; rm -rf "$(GOPATH)/pkg/mod"; exit 1; }
 	chmod -fR +w "$(GOPATH)/pkg/mod"
-	touch "$@"
-
-$(DESTDIR)/libwg-go.so: $(BUILDDIR)/.prepared
-	cd "$(BUILDDIR)" && go build -ldflags="-X main.socketDirectory=/data/data/$(ANDROID_PACKAGE_NAME)/cache/wireguard" -v -o "$@" -buildmode c-shared
-	go version > .gobuildversion
+	go build -tags linux -ldflags="-X main.socketDirectory=/data/data/$(ANDROID_PACKAGE_NAME)/cache/wireguard" -v -o "$@" -buildmode c-shared
+	go version > $(BUILDDIR)/.gobuildversion

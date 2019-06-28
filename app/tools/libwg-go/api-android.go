@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0
  *
- * Copyright (C) 2017-2018 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+ * Copyright (C) 2017-2019 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
  */
 
 package main
@@ -11,9 +11,10 @@ import "C"
 
 import (
 	"bufio"
-	"git.zx2c4.com/wireguard-go/tun"
 	"golang.org/x/sys/unix"
-	"io/ioutil"
+	"golang.zx2c4.com/wireguard/device"
+	"golang.zx2c4.com/wireguard/ipc"
+	"golang.zx2c4.com/wireguard/tun"
 	"log"
 	"math"
 	"net"
@@ -35,14 +36,14 @@ func (l AndroidLogger) Write(p []byte) (int, error) {
 }
 
 type TunnelHandle struct {
-	device *Device
+	device *device.Device
 	uapi   net.Listener
 }
 
 var tunnelHandles map[int32]TunnelHandle
 
 func init() {
-	roamingDisabled = true
+	device.RoamingDisabled = true
 	tunnelHandles = make(map[int32]TunnelHandle)
 	signals := make(chan os.Signal)
 	signal.Notify(signals, unix.SIGUSR2)
@@ -53,7 +54,7 @@ func init() {
 			case <-signals:
 				n := runtime.Stack(buf, true)
 				buf[n] = 0
-				C.__android_log_write(C.ANDROID_LOG_ERROR, C.CString("WireGuard/GoBackend/Stacktrace"), (*_Ctype_char)(unsafe.Pointer(&buf[0])))
+				C.__android_log_write(C.ANDROID_LOG_ERROR, C.CString("WireGuard/GoBackend/Stacktrace"), (*C.char)(unsafe.Pointer(&buf[0])))
 			}
 		}
 	}()
@@ -63,7 +64,7 @@ func init() {
 func wgTurnOn(ifnameRef string, tunFd int32, settings string) int32 {
 	interfaceName := string([]byte(ifnameRef))
 
-	logger := &Logger{
+	logger := &device.Logger{
 		Debug: log.New(&AndroidLogger{level: C.ANDROID_LOG_DEBUG, interfaceName: interfaceName}, "", 0),
 		Info:  log.New(&AndroidLogger{level: C.ANDROID_LOG_INFO, interfaceName: interfaceName}, "", 0),
 		Error: log.New(&AndroidLogger{level: C.ANDROID_LOG_ERROR, interfaceName: interfaceName}, "", 0),
@@ -71,7 +72,7 @@ func wgTurnOn(ifnameRef string, tunFd int32, settings string) int32 {
 
 	logger.Debug.Println("Debug log enabled")
 
-	tun, name, err := tun.CreateTUNFromFD(int(tunFd))
+	tun, name, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
 	if err != nil {
 		unix.Close(int(tunFd))
 		logger.Error.Println(err)
@@ -79,25 +80,22 @@ func wgTurnOn(ifnameRef string, tunFd int32, settings string) int32 {
 	}
 
 	logger.Info.Println("Attaching to interface", name)
-	device := NewDevice(tun, logger)
+	device := device.NewDevice(tun, logger)
 
-	logger.Debug.Println("Interface has MTU", device.tun.mtu)
-
-	bufferedSettings := bufio.NewReadWriter(bufio.NewReader(strings.NewReader(settings)), bufio.NewWriter(ioutil.Discard))
-	setError := ipcSetOperation(device, bufferedSettings)
+	setError := device.IpcSetOperation(bufio.NewReader(strings.NewReader(settings)))
 	if setError != nil {
 		unix.Close(int(tunFd))
 		logger.Error.Println(setError)
 		return -1
 	}
 
-	var uapi net.Listener;
+	var uapi net.Listener
 
-	uapiFile, err := UAPIOpen(name)
+	uapiFile, err := ipc.UAPIOpen(name)
 	if err != nil {
 		logger.Error.Println(err)
 	} else {
-		uapi, err = UAPIListen(name, uapiFile)
+		uapi, err = ipc.UAPIListen(name, uapiFile)
 		if err != nil {
 			uapiFile.Close()
 			logger.Error.Println(err)
@@ -108,7 +106,7 @@ func wgTurnOn(ifnameRef string, tunFd int32, settings string) int32 {
 					if err != nil {
 						return
 					}
-					go ipcHandle(device, conn)
+					go device.IpcHandle(conn)
 				}
 			}()
 		}
@@ -150,22 +148,11 @@ func wgGetSocketV4(tunnelHandle int32) int32 {
 	if !ok {
 		return -1
 	}
-	native, ok := handle.device.net.bind.(*NativeBind)
-	if !ok {
-		return -1
-	}
-	fd := int32(-1)
-	conn, err := native.ipv4.SyscallConn()
+	fd, err := handle.device.PeekLookAtSocketFd4()
 	if err != nil {
 		return -1
 	}
-	err = conn.Control(func(f uintptr) {
-		fd = int32(f)
-	})
-	if err != nil {
-		return -1
-	}
-	return fd
+	return int32(fd)
 }
 
 //export wgGetSocketV6
@@ -174,27 +161,16 @@ func wgGetSocketV6(tunnelHandle int32) int32 {
 	if !ok {
 		return -1
 	}
-	native, ok := handle.device.net.bind.(*NativeBind)
-	if !ok {
-		return -1
-	}
-	fd := int32(-1)
-	conn, err := native.ipv6.SyscallConn()
+	fd, err := handle.device.PeekLookAtSocketFd6()
 	if err != nil {
 		return -1
 	}
-	err = conn.Control(func(f uintptr) {
-		fd = int32(f)
-	})
-	if err != nil {
-		return -1
-	}
-	return fd
+	return int32(fd)
 }
 
 //export wgVersion
 func wgVersion() *C.char {
-	return C.CString(WireGuardGoVersion)
+	return C.CString(device.WireGuardGoVersion)
 }
 
 func main() {}

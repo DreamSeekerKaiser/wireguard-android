@@ -1,5 +1,5 @@
 /*
- * Copyright © 2017-2018 WireGuard LLC. All Rights Reserved.
+ * Copyright © 2017-2019 WireGuard LLC. All Rights Reserved.
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -128,6 +128,6 @@ public final class WgQuickBackend implements Backend {
         // noinspection ResultOfMethodCallIgnored
         tempFile.delete();
         if (result != 0)
-            throw new Exception(context.getString(R.string.tunnel_config_error));
+            throw new Exception(context.getString(R.string.tunnel_config_error, result));
     }
 }
